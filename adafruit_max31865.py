@@ -80,6 +80,14 @@ class MAX31865:
     :param int wires: Number of wires. Defaults to :const:`2`
     :param int filter_frequency: . Filter frequency. Default to :const:`60`
     :param int polarity: set to 1 if controller clock idles high. Default 0.
+    :param int parallel_resistor: Use this if you want to measure a
+    pt1000 rtd with a pt100 sensor. A 330ohm resistor in parallel with
+    the RTD is a good compromise. Of course, the useful range is reduced!
+    Default math.inf.
+    :param int serial_resistor: Use this if you want to measure a
+    pt100 rtd with a pt1000 sensor. A 1000ohm resistor, mounted serially
+    with the RTD is a reasonable compromise. Note however that the useful
+    range is catastrophically reduced! Default 0.
 
 
     **Quickstart: Importing and using the MAX31865**
@@ -123,12 +131,16 @@ class MAX31865:
         *,
         polarity=0,
         rtd_nominal=100,
+        parallel_resistor=math.inf,
+        serial_resistor=0,
         ref_resistor=430.0,
         wires=2,
         filter_frequency=60
     ):
         self.rtd_nominal = rtd_nominal
         self.ref_resistor = ref_resistor
+        self.parallel_resistor = parallel_resistor
+        self.serial_resistor = serial_resistor
         self._device = spi_device.SPIDevice(
             spi, cs, baudrate=500000, polarity=polarity, phase=1
         )
@@ -271,7 +283,10 @@ class MAX31865:
         resistance = self.read_rtd()
         resistance /= 32768
         resistance *= self.ref_resistor
-        return resistance
+        try:
+            return 1/(1/(resistance - self.serial_resistor) - 1/self.parallel_resistor)
+        except ZeroDivisionError:
+            return math.nan
 
     @property
     def temperature(self):
@@ -283,15 +298,18 @@ class MAX31865:
         # To match the naming from the app note we tell lint to ignore the Z1-4
         # naming.
         # pylint: disable=invalid-name
-        raw_reading = self.resistance
-        Z1 = -_RTD_A
-        Z2 = _RTD_A * _RTD_A - (4 * _RTD_B)
-        Z3 = (4 * _RTD_B) / self.rtd_nominal
-        Z4 = 2 * _RTD_B
-        temp = Z2 + (Z3 * raw_reading)
-        temp = (math.sqrt(temp) + Z1) / Z4
-        if temp >= 0:
-            return temp
+        try:
+            raw_reading = self.resistance
+            Z1 = -_RTD_A
+            Z2 = _RTD_A * _RTD_A - (4 * _RTD_B)
+            Z3 = (4 * _RTD_B) / self.rtd_nominal
+            Z4 = 2 * _RTD_B
+            temp = Z2 + (Z3 * raw_reading)
+            temp = (math.sqrt(temp) + Z1) / Z4
+            if temp >= 0:
+                return temp
+        except ValueError:
+            return math.nan
 
         # For the following math to work, nominal RTD resistance must be normalized to 100 ohms
         raw_reading /= self.rtd_nominal
